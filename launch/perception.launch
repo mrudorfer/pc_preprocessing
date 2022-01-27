@@ -1,0 +1,127 @@
+<!-- this launch file is inspired by (and in parts copied from) here:
+    https://github.com/NU-MSR/nodelet_pcl_demo/blob/me495/launch/nodelet_table_extraction.launch -->
+
+<launch>
+    <arg name="downsample"  default="false" doc="Wether or not to use downsampling of point cloud"/>
+    <arg name="vis" default="false" doc="Launch RViZ"/>
+    <arg name="quality" default="qhd" doc="which kinect2 output to use for further processing [sd, qhd, hd]"/>
+    <arg name="nodelet_manager" default="perception_manager" doc="name of nodelet manager to use"/>
+    <arg name="create_manager" default="true" doc="set to false if you provide an existing node manager"/>
+    <arg name="fps_limit" default="5" doc="number of frames captured by kinect"/>
+    <arg name="distance_threshold" default="0.013" doc="distance threshold for plane segmentation"/>
+
+    <!-- setup the manager if necessary -->
+    <node pkg="nodelet" type="nodelet" name="$(arg nodelet_manager)" args="manager" output="screen" if="$(arg create_manager)"/>
+
+    <!-- setting up kinect2 sensor -->
+    <include file="$(find kinect2_bridge)/launch/kinect2_bridge.launch">
+        <arg name="nodelet_manager" value="$(arg nodelet_manager)"/>
+        <arg name="start_manager" value="false"/>
+        <arg name="fps_limit" value="$(arg fps_limit)"/>
+        <arg name="publish_tf" value="true"/>
+    </include>
+
+    <group ns="preprocess">
+        <node pkg="nodelet" type="nodelet" name="passthrough" args="load pcl/PassThrough /$(arg nodelet_manager)" output="screen">
+            <remap from="~input" to="/kinect2/$(arg quality)/points" />
+            <rosparam>
+                input_frame: world
+                output_frame: world
+                filter_field_name: z
+                filter_limit_min: 0
+                filter_limit_max: 0.5
+            </rosparam>
+        </node>
+
+        <!-- crop point cloud; crop adjusted to pose of camera for experimental setup
+            x-axis points to the right
+            y-axis points downwards
+            z-axis towards scene
+        -->
+        <node pkg="nodelet" type="nodelet" name="crop_box" args="load pcl/CropBox /$(arg nodelet_manager)" output="screen">
+            <remap from="~input" to="passthrough/output" />
+            <rosparam>
+                min_x: 0.2
+                max_x: 0.8
+                min_y: -0.3
+                max_y: 0.3
+                min_z: 0
+                max_z: 0.5
+            </rosparam>
+        </node>
+
+        <!-- optionally downsample point cloud;
+             todo: unsure what the arguments mean -->
+        <node pkg="nodelet" type="nodelet" name="voxel_downsample" args="load pcl/VoxelGrid /$(arg nodelet_manager)" output="screen"
+            if="$(arg downsample)">
+            <remap from="~input" to="crop_box/output" />
+            <rosparam>
+                leaf_size: 0.01
+                filter_field_name: z
+                filter_limit_min: -10.0
+                filter_limit_max: 10.0
+            </rosparam>
+        </node>
+
+        <!-- table extraction... The `~model_type` private parameter was found by
+            looking at the `model_types.h` file included in PCL source code
+            (available here:
+            http://docs.pointclouds.org/1.7.0/model__types_8h_source.html). The `0`
+            type corresponds to pcl::SACMODEL_PLANE. -->
+        <node pkg="nodelet" type="nodelet" name="plane_identification" args="load pcl/SACSegmentation /$(arg nodelet_manager)" output="screen">
+            <remap from="~input" to="voxel_downsample/output" if="$(arg downsample)"/>
+            <remap from="~input" to="crop_box/output" unless="$(arg downsample)"/>
+            <param name="model_type" value="0" type="int" />
+            <param name="distance_threshold" value="$(arg distance_threshold)" type="double" />
+        </node>
+
+          <!-- extract indices... these two nodelets use the indices produced by the
+       planar model extraction to build two new point clouds (the inliers and
+       outliers of the model). The `~negative` private parameter in the second
+       nodelet is what causes it to produce the outliers instead of the inliers.
+       Note that both nodelets need the `approximate_sync` private parameter set
+       to true. These nodelets have two subscribers (one for the indices and one
+       for the cloud), and both subscribers are bound to a single callback using
+       a `message_filters::Synchronizer`. Through this mechanism, the callback
+       is only run when both topics are available, and the received messages are
+       both passed to this callback. The `approximate_sync` parameter being
+       `true` causes the subscribers to be bound using a
+       `sync_policies::ApproximateTime` synchronization strategy (as opposed to
+       a `sync_policies::ExactTime` strategy). We need the approximate time
+       strategy because the time that the indices are published does not line up
+       with the time that the point cloud is published. Using exact time
+       strategy results in the callback only running occasionally (when you are
+       lucky enough that two topics line up in time).
+       -->
+       <!-- we don't actually need the inliers, which is the plane, just the outliers...
+        <node pkg="nodelet" type="nodelet" name="extract_inliers" args="load pcl/ExtractIndices /$(arg nodelet_manager)" output="screen">
+            <remap from="~input" to="voxel_downsample/output" if="$(arg downsample)"/>
+            <remap from="~input" to="crop_box/output" unless="$(arg downsample)"/>
+            <remap from="~indices" to="segmentation/inliers" />
+            <param name="approximate_sync" value="true" />
+        </node>
+        -->
+        <node pkg="nodelet" type="nodelet" name="plane_removal" args="load pcl/ExtractIndices /$(arg nodelet_manager)" output="screen">
+            <remap from="~input" to="voxel_downsample/output" if="$(arg downsample)"/>
+            <remap from="~input" to="crop_box/output" unless="$(arg downsample)"/>
+            <remap from="~indices" to="plane_identification/inliers" />
+            <param name="negative" value="true" />
+            <param name="approximate_sync" value="true" />
+        </node>
+
+        <!-- finally some outlier removal -->
+        <node pkg="nodelet" type="nodelet" name="outlier_removal" args="load pcl/StatisticalOutlierRemoval /$(arg nodelet_manager)" output="screen">
+            <remap from="~input" to="plane_removal/output" />
+            <rosparam>
+                mean_k: 10
+                stddev: 0.01
+            </rosparam>
+        </node>
+
+
+    </group>
+
+
+  <node pkg="rviz" type="rviz" respawn="false" name="rviz" if="$(arg vis)" args="-d $(find pc_preprocessing)/launch/perception-config.rviz" />
+
+</launch>
