@@ -4,6 +4,7 @@
 <launch>
     <arg name="downsample"  default="false" doc="Wether or not to use downsampling of point cloud"/>
     <arg name="vis" default="false" doc="Launch RViZ"/>
+    <arg name="calib" default="true" doc="whether to start world_camer_tf from hand_eye_calibration package"/>
     <arg name="quality" default="qhd" doc="which kinect2 output to use for further processing [sd, qhd, hd]"/>
     <arg name="nodelet_manager" default="perception_manager" doc="name of nodelet manager to use"/>
     <arg name="create_manager" default="true" doc="set to false if you provide an existing node manager"/>
@@ -20,6 +21,14 @@
         <arg name="fps_limit" value="$(arg fps_limit)"/>
         <arg name="publish_tf" value="true"/>
     </include>
+
+    <!-- setting up calibrated transform of kinect2_link to world system -->
+    <node pkg="hand_eye_calibration" type="world_camera_tf.py" name="world_camera_tf" output="screen" if="$(arg calib)">
+        <rosparam>
+            world_frame: world
+            camera_frame: kinect2_link
+        </rosparam>
+    </node>
 
     <group ns="preprocess">
         <node pkg="nodelet" type="nodelet" name="passthrough" args="load pcl/PassThrough /$(arg nodelet_manager)" output="screen">
