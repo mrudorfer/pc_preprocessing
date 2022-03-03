@@ -28,7 +28,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: cropped point cloud
+    SyncSource: final point cloud
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -77,7 +77,7 @@ Visualization Manager:
       Size (Pixels): 3
       Size (m): 0.009999999776482582
       Style: Flat Squares
-      Topic: /preprocess/outlier_removal/output
+      Topic: /preprocess/result
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -110,17 +110,49 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: RGB8
+      Decay Time: 0
+      Enabled: false
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: realsense point cloud
+      Position Transformer: XYZ
+      Queue Size: 10
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.009999999776482582
+      Style: Flat Squares
+      Topic: /camera/depth/color/points
+      Unreliable: false
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: false
     - Class: rviz/TF
       Enabled: true
       Frame Timeout: 15
       Frames:
         All Enabled: false
-        kinect2_ir_optical_frame:
-          Value: false
-        kinect2_link:
+        camera_color_frame:
           Value: true
-        kinect2_rgb_optical_frame:
-          Value: false
+        camera_color_optical_frame:
+          Value: true
+        camera_depth_frame:
+          Value: true
+        camera_depth_optical_frame:
+          Value: true
+        camera_link:
+          Value: true
         world:
           Value: true
       Marker Alpha: 1
@@ -130,9 +162,12 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        kinect2_link:
-          kinect2_rgb_optical_frame:
-            kinect2_ir_optical_frame:
+        camera_link:
+          camera_color_frame:
+            camera_color_optical_frame:
+              {}
+          camera_depth_frame:
+            camera_depth_optical_frame:
               {}
           world:
             {}
@@ -182,9 +217,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.2602030038833618
+      Pitch: 0.2552032470703125
       Target Frame: <Fixed Frame>
-      Yaw: 5.198548316955566
+      Yaw: 6.128550052642822
     Saved: ~
 Window Geometry:
   Displays:

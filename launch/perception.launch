@@ -3,41 +3,82 @@
 
 <launch>
     <arg name="downsample"  default="false" doc="Wether or not to use downsampling of point cloud"/>
+    <arg name="remove_outliers" default="false" doc="Whether to use outlier_removal"/>
     <arg name="vis" default="false" doc="Launch RViZ"/>
-    <arg name="calib" default="true" doc="whether to start world_camer_tf from hand_eye_calibration package"/>
-    <arg name="quality" default="qhd" doc="which kinect2 output to use for further processing [sd, qhd, hd]"/>
+
+    <arg name="calibrated" default="true" doc="start world_camera_tf if true, else marker detection"/>
     <arg name="nodelet_manager" default="perception_manager" doc="name of nodelet manager to use"/>
     <arg name="create_manager" default="true" doc="set to false if you provide an existing node manager"/>
-    <arg name="fps_limit" default="5" doc="number of frames captured by kinect"/>
     <arg name="distance_threshold" default="0.013" doc="distance threshold for plane segmentation"/>
+    <arg name="fps_limit" default="6" doc="frame rate limit (to save computation power)"/>
+    <arg name="camera" default="realsense" doc="either kinect2 or realsense"/>
+
+    <!-- kinect 2 parameters -->
+    <arg name="quality" default="qhd" doc="which kinect2 output to use for further processing [sd, qhd, hd]"/>
 
     <!-- setup the manager if necessary -->
     <node pkg="nodelet" type="nodelet" name="$(arg nodelet_manager)" args="manager" output="screen" if="$(arg create_manager)"/>
 
     <!-- setting up kinect2 sensor -->
-    <include file="$(find kinect2_bridge)/launch/kinect2_bridge.launch">
+    <include file="$(find kinect2_bridge)/launch/kinect2_bridge.launch" if="$(eval camera=='kinect2')">
         <arg name="nodelet_manager" value="$(arg nodelet_manager)"/>
         <arg name="start_manager" value="false"/>
         <arg name="fps_limit" value="$(arg fps_limit)"/>
         <arg name="publish_tf" value="true"/>
     </include>
 
-    <!-- setting up calibrated transform of kinect2_link to world system -->
-    <node pkg="hand_eye_calibration" type="world_camera_tf.py" name="world_camera_tf" output="screen" if="$(arg calib)">
-        <rosparam>
-            world_frame: world
-            camera_frame: kinect2_link
-        </rosparam>
-    </node>
+    <!-- setting up realsense sensor /camera/depth/color/points -->
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch" if="$(eval camera=='realsense')">
+        <arg name="depth_width"       value="1280"/>
+        <arg name="depth_height"      value="720"/>
+        <arg name="depth_fps"         value="$(arg fps_limit)"/>
+        <arg name="color_width"       value="1280"/>
+        <arg name="color_height"      value="720"/>
+        <arg name="color_fps"         value="$(arg fps_limit)"/>
+        <arg name="enable_depth"      value="true"/>
+        <arg name="enable_color"      value="true"/>
+        <arg name="enable_infra1"     value="false"/>
+        <arg name="enable_infra2"     value="false"/>
+        <arg name="enable_fisheye"    value="false"/>
+        <arg name="enable_gyro"       value="false"/>
+        <arg name="enable_accel"      value="false"/>
+        <arg name="enable_sync"       value="true"/>
+        <arg name="filters"           value="decimation,temporal,pointcloud"/>
+        <arg name="external_manager"  value="true"/>
+        <arg name="manager"           value="/$(arg nodelet_manager)"/>
+    </include>
+
+    <!-- if calibrated, setting up calibrated transform of camera link to world frame -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="external_calibration_broadcaster"
+            args="1.29449403 -0.03898631 0.13348369 0.23322143 0.08390683 -0.95261852 -0.17631043 camera_link world"
+            if="$(arg calibrated)" />
+
+    <!-- if not calibrated, we will set up marker detection -->
+    <group ns="external_calibration" unless="$(arg calibrated)">
+        <!-- assuming our marker is next to the base of the robot -->
+        <node pkg="tf2_ros" type="static_transform_publisher" name="marker_frame_broadcaster"
+                args="0 -0.22 0 0 0 0 1 marker_frame world"/>
+        <node pkg="hand_eye_calibration" type="detect_markers.py" name="detect_markers" output="screen">
+            <rosparam>
+                input_image: /camera/color/image_raw
+                camera_info: /camera/color/camera_info
+                camera_frame: camera_color_optical_frame
+                marker_is_parent: false
+                marker_count_x: 7
+                marker_count_y: 5
+            </rosparam>
+        </node>
+    </group>
 
     <group ns="preprocess">
         <node pkg="nodelet" type="nodelet" name="passthrough" args="load pcl/PassThrough /$(arg nodelet_manager)" output="screen">
-            <remap from="~input" to="/kinect2/$(arg quality)/points" />
+            <remap from="~input" to="/kinect2/$(arg quality)/points" if="$(eval camera=='kinect2')" />
+            <remap from="~input" to="/camera/depth/color/points" if="$(eval camera=='realsense')" />
             <rosparam>
                 input_frame: world
                 output_frame: world
                 filter_field_name: z
-                filter_limit_min: 0
+                filter_limit_min: -0.1
                 filter_limit_max: 0.5
             </rosparam>
         </node>
@@ -55,7 +96,7 @@
                 min_y: -0.3
                 max_y: 0.3
                 min_z: 0
-                max_z: 0.5
+                max_z: 0.4
             </rosparam>
         </node>
 
@@ -84,6 +125,10 @@
             <param name="distance_threshold" value="$(arg distance_threshold)" type="double" />
         </node>
 
+        <!-- do some remapping to have a nice and consistent output topic -->
+        <remap from="plane_removal/output" to="result" unless="$(arg remove_outliers)" />
+        <remap from="outlier_removal/output" to="result" if="$(arg remove_outliers)" />
+
           <!-- extract indices... these two nodelets use the indices produced by the
        planar model extraction to build two new point clouds (the inliers and
        outliers of the model). The `~negative` private parameter in the second
@@ -110,6 +155,7 @@
             <param name="approximate_sync" value="true" />
         </node>
         -->
+
         <node pkg="nodelet" type="nodelet" name="plane_removal" args="load pcl/ExtractIndices /$(arg nodelet_manager)" output="screen">
             <remap from="~input" to="voxel_downsample/output" if="$(arg downsample)"/>
             <remap from="~input" to="crop_box/output" unless="$(arg downsample)"/>
@@ -118,16 +164,16 @@
             <param name="approximate_sync" value="true" />
         </node>
 
-        <!-- finally some outlier removal -->
-        <node pkg="nodelet" type="nodelet" name="outlier_removal" args="load pcl/StatisticalOutlierRemoval /$(arg nodelet_manager)" output="screen">
+        <!-- finally some outlier removal.
+            be careful with this, sometimes it fucks up the point clouds massively!!! -->
+        <node pkg="nodelet" type="nodelet" name="outlier_removal" args="load pcl/StatisticalOutlierRemoval /$(arg nodelet_manager)" output="screen"
+            if="$(arg remove_outliers)">
             <remap from="~input" to="plane_removal/output" />
             <rosparam>
                 mean_k: 10
                 stddev: 0.01
             </rosparam>
         </node>
-
-
     </group>
 
 
